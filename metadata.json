@@ -1,0 +1,6 @@
+{
+  "name": "Lista de Compra",
+  "description": "Uma plataforma colaborativa de listas, onde usuários podem criar, editar, excluir e compartilhar listas em tempo real.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

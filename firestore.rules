@@ -1,0 +1,114 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'name', 'avatar', 'createdAt']) &&
+        data.keys().size() == 4 &&
+        data.email is string && data.email.size() <= 128 &&
+        data.name is string && data.name.size() <= 128 &&
+        data.avatar is string && data.avatar.size() <= 512 &&
+        data.createdAt == request.time;
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && request.auth.uid == userId;
+      allow list: if false;
+      allow create: if isSignedIn() && 
+        isValidId(userId) && 
+        request.auth.uid == userId && 
+        isValidUser(incoming());
+      allow update: if isSignedIn() &&
+        request.auth.uid == userId &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatar']) &&
+        (incoming().diff(existing()).affectedKeys().hasAny(['name']) ? incoming().name is string && incoming().name.size() <= 128 : true) &&
+        (incoming().diff(existing()).affectedKeys().hasAny(['avatar']) ? incoming().avatar is string && incoming().avatar.size() <= 512 : true);
+      allow delete: if false;
+    }
+
+    match /users_by_email/{email} {
+      allow get: if isSignedIn();
+      allow list: if false;
+      allow create: if isSignedIn() &&
+        incoming().keys().hasOnly(['userId']) &&
+        incoming().userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    function isValidList(data) {
+      return data.keys().hasAll(['title', 'ownerId', 'memberIds', 'roles', 'createdAt', 'updatedAt']) &&
+        data.title is string &&
+        data.ownerId is string && data.ownerId == request.auth.uid &&
+        data.memberIds is list &&
+        data.roles is map;
+    }
+
+    function isListMember(data) {
+      return isSignedIn() && ('memberIds' in data) && request.auth.uid in data.memberIds;
+    }
+    
+    function isListAdmin(data) {
+      return isSignedIn() && ('roles' in data) && data.roles[request.auth.uid] == 'admin';
+    }
+
+    function isListEditor(data) {
+      return isSignedIn() && ('roles' in data) && (data.roles[request.auth.uid] == 'admin' || data.roles[request.auth.uid] == 'editor');
+    }
+
+    match /lists/{listId} {
+      allow get: if isSignedIn() && isListMember(resource.data);
+      allow list: if isSignedIn() && isListMember(resource.data);
+      allow create: if isSignedIn() && isValidList(incoming());
+      allow update: if isSignedIn() &&
+        isListMember(resource.data) &&
+        (
+          (isListAdmin(resource.data) && incoming().diff(resource.data).affectedKeys().hasOnly(['title', 'memberIds', 'roles', 'updatedAt']))
+          ||
+          (isListEditor(resource.data) && incoming().diff(resource.data).affectedKeys().hasOnly(['title', 'updatedAt']))
+        );
+      allow delete: if isSignedIn() && 
+        isListAdmin(resource.data);
+    }
+
+    function isValidItem(data) {
+      return data.keys().hasAll(['name', 'quantity', 'category', 'checked', 'createdBy', 'createdAt', 'updatedAt', 'creatorName']) &&
+        data.keys().size() == 8 &&
+        data.name is string && data.name.size() > 0 && data.name.size() <= 256 &&
+        data.quantity is number &&
+        data.category is string && data.category.size() <= 128 &&
+        data.checked is bool &&
+        data.createdBy is string && data.createdBy == request.auth.uid &&
+        data.creatorName is string && data.creatorName.size() <= 256 &&
+        data.createdAt == request.time &&
+        data.updatedAt == request.time;
+    }
+
+    function canModifyItems(listId) {
+      let listDoc = get(/databases/$(database)/documents/lists/$(listId));
+      return isSignedIn() && listDoc != null && ('roles' in listDoc.data) && (listDoc.data.roles[request.auth.uid] == 'admin' || listDoc.data.roles[request.auth.uid] == 'editor');
+    }
+
+    function canReadItems(listId) {
+      let listDoc = get(/databases/$(database)/documents/lists/$(listId));
+      return isSignedIn() && listDoc != null && ('memberIds' in listDoc.data) && request.auth.uid in listDoc.data.memberIds;
+    }
+
+    match /lists/{listId}/items/{itemId} {
+      allow get: if get(/databases/$(database)/documents/lists/$(listId)) != null && isListMember(get(/databases/$(database)/documents/lists/$(listId)).data);
+      allow list: if get(/databases/$(database)/documents/lists/$(listId)) != null && isListMember(get(/databases/$(database)/documents/lists/$(listId)).data);
+      allow create: if get(/databases/$(database)/documents/lists/$(listId)) != null && isListEditor(get(/databases/$(database)/documents/lists/$(listId)).data) && isValidItem(incoming());
+      allow update: if get(/databases/$(database)/documents/lists/$(listId)) != null && isListEditor(get(/databases/$(database)/documents/lists/$(listId)).data);
+      allow delete: if get(/databases/$(database)/documents/lists/$(listId)) != null && isListEditor(get(/databases/$(database)/documents/lists/$(listId)).data);
+    }
+  }
+}
